@@ -92,15 +92,15 @@ function parseFileMetadata(file) {
   // TODO: 實作此函式
   // 提示：呼叫 getFileExtension 取副檔名，Math.round(size / 1024) 算 KB
 
-  if (!file) {
-    return "";
-  }
+  // if (!file) {
+  //   return "";
+  // }
 
   return {
-    filename: file.originalFilename || "",
-    sizeKB: file.size ? Math.round(file.size / 1024) : "",
-    ext: getFileExtension(file.originalFilename),
-    savedPath: file.filepath || "",
+    filename: file?.originalFilename || "",
+    sizeKB: file?.size ? Math.round(file.size / 1024) : "",
+    ext: file?.originalFilename ? getFileExtension(file.originalFilename) : "",
+    savedPath: file?.filepath || "",
   };
 }
 
@@ -159,9 +159,11 @@ function router(req, res, config) {
   //   - 拆出 handleNotFound(req, res)：404 邏輯
   //   - router 只看 method + url、呼叫對應 handler
   // formidable 錯誤處理要點：
-  //   - 超過 maxFileSize 時 formidable v3 發 'error' event，要用 form.on('error', ...) 接
-  //   - 同時 form.parse 的 callback err 也要處理
-  //   - 避免重複 res.writeHead（檢查 res.headersSent）
+  //   - 錯誤解析（例如：maxFileSize）會進到 form.parse 的 callback err，因此錯誤回應（res）可撰寫在這個 callback
+  //   - form.on('error', ...) 不需再處理 res 相關，避免產生回應兩次的錯誤。這個部分可用來紀錄 log、清理暫存檔、額外監控等等。目前可先有此概念即可，或者初步撰寫如下：
+  //     form.on('error', (err) => {
+  //       console.log(err); // 記錄 log、清理暫存檔、額外監控可以寫在這邊
+  //     });
 
   // 路由分派： POST /coaches/avatar
   if (req.method === "POST" && req.url === "/coaches/avatar") {
@@ -226,10 +228,19 @@ function handleUpload(req, res, config) {
     keepExtensions: true,
   });
 
+  form.on("error", (err) => {
+    // if (!res.headersSent) {
+    //   res.writeHead(500, { "Content-Type": "application/json" });
+    //   res.end(JSON.stringify({ error: err.message }));
+    // }
+    console.log(err);
+  });
+
   // 2. 解析請求 form.parse 是非同步，用 callback 拿結果
   form.parse(req, (err, fields, files) => {
     //2.1 解析過程出錯，例如檔案大小超出限制，會發送 http 500
     if (err) {
+      if (res.headersSent) return;
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: err.message }));
       return;
@@ -238,12 +249,14 @@ function handleUpload(req, res, config) {
     //2.2 formidable v3 取得req發送的欄位(file)，該欄位會放置在解析後放到物件，而內容是陣列第一個，且名稱為上傳欄位，如果沒有上傳檔案則會是undefine
     const file = files.file?.[0];
     if (!file) {
+      if (res.headersSent) return;
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "No file uploaded" }));
       return;
     }
 
     // 2.3成功得到檔案後，並發送http 200 成功數據
+    if (res.headersSent) return;
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(parseFileMetadata(file)));
   });
